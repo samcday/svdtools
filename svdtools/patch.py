@@ -842,6 +842,8 @@ class Peripheral:
         for rtag in self.ptag.iter("register"):
             nametag = rtag.find("name")
             nametag.text = regex.sub("", nametag.text)
+            if rtag.get("derivedFrom"):
+                rtag.set("derivedFrom", regex.sub("", rtag.get("derivedFrom")))
 
             dnametag = rtag.find("displayName")
             if dnametag is not None:
@@ -885,8 +887,8 @@ class Peripheral:
             and check_bitmasks(bitmasks, bitmasks[0])
         ):
             raise SvdPatchError(
-                "{}: registers cannot be collected into {} array".format(
-                    self.ptag.findtext("name"), rspec
+                "{}: registers cannot be collected into {} array {}".format(
+                    self.ptag.findtext("name"), rspec, bitmasks
                 )
             )
         for rtag, _, _ in registers[1:]:
@@ -1048,7 +1050,24 @@ class Register:
         """
         Iterates over all fields that match fspec and live inside rtag.
         """
+
         fields = self.rtag.find("fields")
+        if self.rtag.get("derivedFrom"):
+            srcname = self.rtag.get("derivedFrom")
+            parent = list(self.rtag.iterancestors("registers"))[0]
+
+            source = None
+            for rtag in parent.iter("register"):
+                if rtag.find("name").text == srcname:
+                    source = rtag
+            if source is None:
+                raise SvdPatchError(
+                    "register {} derivedFrom nonexistent register {}".format(
+                        self.rtag.find("name"), self.rtag.get("derivedFrom")
+                    )
+                )
+            fields = source.find("fields")
+
         if fields is not None:
             for ftag in fields.iter("field"):
                 name = ftag.find("name").text
@@ -1243,6 +1262,11 @@ class Register:
 
     def process_field_enum(self, pname, fspec, field, usage="read-write"):
         """Add an enumeratedValues given by field to all fspec in rtag."""
+        if "_remove_enum" in field:
+            for ftag in self.iter_fields(fspec):
+                ftag.remove(ftag.find("enumeratedValues"))
+            return
+
         replace_if_exists = False
         if "_replace_enum" in field:
             field = field["_replace_enum"]
@@ -1328,8 +1352,9 @@ class Register:
 
     def get_bitmask(self):
         """Calculate filling of register"""
+        ftags = self.iter_fields("*")
         mask = 0x0
-        for ftag in self.iter_fields("*"):
+        for ftag in ftags:
             foffset, fwidth = get_field_offset_width(ftag)
             mask |= (0xFFFFFFFF >> (32 - fwidth)) << foffset
         return mask
